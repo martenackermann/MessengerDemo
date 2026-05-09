@@ -1,139 +1,116 @@
 # Messenger Demo
 
-A secure real-time messaging application with End-to-End Encryption (E2EE), built with .NET SignalR (Backend) and Vue.js (Frontend).
+A secure real-time messaging application with End-to-End Encryption (E2EE), built with .net 9 (SignalR) and Vue 3.
 
-## How to Run
+## Architecture Overview
 
-### Prerequisites
-- [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0)
-- [Node.js](https://nodejs.org/) (v18 or newer)
-- npm
+The application follows a client-server architecture where the server acts as a blind relay and orchestrator, while all cryptographic operations are performed on the client side.
 
-### Backend
-1. Navigate to the backend directory:
-   ```bash
-   cd backend/ChatApp.Api
-   ```
-2. Run the application:
-   ```bash
-   dotnet run
-   ```
-   The backend will start at `http://localhost:5133`.
+### Backend (.net 9)
+- **SignalR Hub**: Manages real-time connections, room participation, and message broadcasting.
+- **Core Layer**: Defines domain models (`ChatRoom`, `ChatMessage`) and interfaces for services and repositories.
+- **Infrastructure Layer**: Implements data persistence (currently using an in-memory repository).
+- **Security**: The backend never sees plaintext message content. It stores encrypted room keys and facilitates public key exchange.
 
-### Frontend
-1. Navigate to the frontend directory:
-   ```bash
-   cd frontend
-   ```
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
-3. Run the development server:
-   ```bash
-   npm run dev
-   ```
-   The frontend will be available at `http://localhost:5173`.
+### Frontend (Vue 3 + Vite)
+- **State Management**: Pinia stores handle chat history, keys, and user sessions.
+- **SignalR Service**: Manages the persistent WebSocket connection to the backend.
+- **E2EE Service**: Utilizes the **Web Crypto API** for all cryptographic operations (AES-GCM, ECDH).
+- **Components**: Modular Vue components for the chat interface and dashboard.
 
 ---
 
-## Message Format
+## End-to-End Encryption (E2EE)
 
-The application uses a standardized protocol for all communication between the client and the server.
+The application implements a robust E2EE flow to ensure that only authorized participants can read messages.
 
-### Base Protocol Message
-```typescript
-interface ProtocolMessage {
-    id?: string;
-    type: MessageType; // "connect" | "handshake" | "identity" | "chat" | "typing" | "error" | "presence"
-    senderId: string;
-    senderDisplayName?: string;
-    roomId: string;
-    payload: unknown;
-}
+### 1. Identity & Public Keys
+- Each user generates an **ECDH (P-256)** key pair upon login/session start.
+- Public keys are registered on the server via `RegisterPublicKey`.
+
+### 2. Room Key Generation & Distribution
+- When a room is created or a user joins, a symmetric **AES-GCM 256-bit** "Room Key" is used for the room's messages.
+- If a user needs the room key (e.g., after joining), the creator or an existing member encrypts the Room Key using the new member's public key (via ECDH shared secret derivation).
+- These encrypted room keys are stored on the server via `StoreRoomKey` and retrieved by members via `GetRoomKey`.
+
+### 3. Message Encryption
+- **Encryption**: Messages are encrypted locally using **AES-GCM**.
+- **Payload**: The `ProtocolMessage` contains the encrypted payload as a raw string/JSON.
+- **Persistence**: Encrypted messages are stored on the server, allowing for history retrieval while maintaining privacy.
+
+---
+
+## Communication Protocol
+
+Communication occurs over SignalR using a standardized `ProtocolMessage` format.
+
+```csharp
+public record ProtocolMessage(
+    string Type,                // "chat" | "presence" | "handshake" | etc.
+    string SenderId,
+    string RoomId,
+    JsonElement Payload,        // Encrypted data or control information
+    string? SenderDisplayName
+);
 ```
 
-### Common Payloads
-- **Chat**: Contains encrypted content.
-  ```typescript
-  {
-      senderDisplayName?: string;
-      encrypted: {
-          iv: number[];
-          data: number[];
-      };
-  }
-  ```
-- **Presence**: User status updates.
-  ```typescript
-  {
-      status: "online" | "offline" | "inactive";
-      displayName: string;
-  }
-  ```
-- **Handshake/Identity**: Used for E2EE key exchange, containing Public Keys and Fingerprints.
+### Key Message Types
+- `chat`: Contains the AES-GCM encrypted message content.
+- `presence`: Updates user status (online/offline).
+- `RoomKey`: Distribution of encrypted room keys.
+- `MemberPublicKeys`: Retrieval of public keys for E2EE handshakes.
 
 ---
 
-## Encryption Handling
+## Project Structure
 
-The application implements End-to-End Encryption using the **Web Crypto API**.
-
-### Key Exchange (Double Ratchet inspired)
-1. **Identity**: Each client generates an ECDH (P-256) key pair.
-2. **Handshake**: Clients exchange public keys via the SignalR hub.
-3. **Shared Secret**: A shared secret is derived using **ECDH** (Elliptic Curve Diffie-Hellman).
-4. **Room Key**: A symmetric **AES-GCM 256-bit** "Room Key" is generated by the room creator.
-5. **Key Transport**: The Room Key is encrypted with the derived shared secret and sent to the other participant.
-
-### Message Encryption
-- All chat messages are encrypted locally before being sent.
-- **Algorithm**: AES-GCM (256-bit).
-- **Integrity**: AES-GCM provides authenticated encryption, ensuring that messages cannot be tampered with in transit.
-- The backend never sees the plaintext messages or the Room Key.
+```text
+.
+├── README.md
+├── backend/
+│   └── ChatApp.Api/            # .net 9 Web API
+│       ├── Core/               # Domain Models & Interfaces
+│       ├── Infrastructure/     # Data Access (InMemory)
+│       ├── Hubs/               # SignalR Hubs
+│       └── Program.cs          # Dependency Injection & Middleware
+└── frontend/
+    └── src/                    # Vue 3 Frontend
+        ├── services/           # SignalR & Crypto logic
+        ├── stores/             # Pinia state (Chat, Keys)
+        ├── components/         # UI Components
+        └── views/              # Page Views
+```
 
 ---
 
-## Future Improvements
+## Getting Started
 
-- **Persistent Storage**: Currently, the backend uses an in-memory repository. Transitioning to a database like PostgreSQL or SQL Server would allow for message history persistence.
-- **Group Key Management**: Improve the current 1-to-1 focused key exchange to support secure group chats with multiple participants (e.g., using Messaging Layer Security - MLS).
-- **Multi-device Support**: Implement a mechanism to sync keys across multiple devices belonging to the same user.
-- **File Transfers**: Add support for encrypted file and image sharing.
-- **Push Notifications**: Integrate with FCM/APNs for real-time alerts when the app is in the background.
-- **User Authentication**: Implement robust authentication (OIDC/JWT) instead of the current simple ID-based connection.
+### Prerequisites
+- [.net 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0)
+- [Node.js](https://nodejs.org/) (v18+)
+- npm
 
-## Security Considerations for Production
+### Installation & Run
 
-As an End-to-End Encrypted (E2EE) platform, the backend is "blind" to message content. This shifts the responsibility of content security entirely to the clients. To move from a demo to a live platform, the following risks must be addressed:
+1. **Backend**
+   ```bash
+   cd backend/ChatApp.Api
+   dotnet run
+   ```
+   Server runs at `http://localhost:5133`.
 
-### 1. Cross-Site Scripting (XSS)
-*   **Risk**: Malicious users may send scripts that execute in other users' browsers to steal session tokens or private keys from `localStorage`/`IndexedDB`.
-*   **Mitigation**:
-    *   Always use framework-level escaping (e.g., Vue's `{{ }}`).
-    *   If supporting Rich Text/Markdown, use `DOMPurify` to sanitize HTML.
-    *   Implement a strict **Content Security Policy (CSP)**.
+2. **Frontend**
+   ```bash
+   cd frontend
+   npm install
+   npm run dev
+   ```
+   Client runs at `http://localhost:5173`.
 
-### 2. Identity Spoofing & Man-in-the-Middle (MitM)
-*   **Risk**: A malicious actor could intercept the initial key exchange or spoof a `senderDisplayName`.
-*   **Mitigation**:
-    *   Implement **Safety Numbers / Fingerprints**: Allow users to manually verify the hash of their shared keys.
-    *   **Public Key Infrastructure (PKI)**: Sign public keys using a trusted certificate or a central identity service.
+---
 
-### 3. Metadata Leakage
-*   **Risk**: Even if messages are encrypted, an attacker (or the server owner) can see who is talking to whom, how often, and at what times.
-*   **Mitigation**:
-    *   Use **Sealed Sender** techniques to hide the sender from the server where possible.
-    *   Implement traffic padding to hide message sizes.
-
-### 4. Denial of Service (DoS) via Protocol Abuse
-*   **Risk**: Users could spam `handshake` or `typing` messages to overwhelm the clients or the SignalR hub.
-*   **Mitigation**:
-    *   Implement **Rate Limiting** on the SignalR Hub.
-    *   Validate payload sizes on the server before broadcasting to other peers.
-
-### 5. Key Exfiltration
-*   **Risk**: If the client-side state is compromised, the "Room Keys" stored in memory or `IndexedDB` could be stolen.
-*   **Mitigation**:
-    *   Use `sessionStorage` for sensitive keys where possible, or encrypt `IndexedDB` with a user-provided passphrase.
-    *   Enable **Perfect Forward Secrecy (PFS)** by rotating keys frequently.
+## Future Roadmap
+- **Persistent Database**: Replace `InMemoryChatRepository` with PostgreSQL/SQL Server.
+- **Identity Verification**: Implement Safety Numbers (fingerprints) for MitM protection.
+- **File Encryption**: Support for E2EE file transfers.
+- **Authentication**: Integrate JWT/OIDC for secure user identities.
